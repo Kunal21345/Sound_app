@@ -1,0 +1,18 @@
+[project]
+name = "sound-app"
+version = "0.1.0"
+description = "Audio-production tooling for the Storybook application"
+requires-python = ">=3.9,<3.12"
+dependencies = [
+  "TTS==0.22.0",
+  "lameenc==1.8.1",
+  "librosa==0.10.0",
+  "numpy==1.22.0",
+  "pyloudnorm==0.2.0",
+  "scipy==1.11.4",
+  "soundfile==0.13.1",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"

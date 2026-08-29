@@ -1,0 +1,6 @@
+.DS_Store
+.venv/
+.audio-venv*/
+.audio-work/
+__pycache__/
+*.py[cod]

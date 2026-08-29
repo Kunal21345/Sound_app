@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "voice_id": "gotu-v1",
+  "display_name": "Gotu",
+  "renderer_revision": "bedtime-v2",
+  "description": "Canonical warm male bedtime story narrator",
+  "reference": {
+    "path": ".audio-work/adventure-reference/htdemucs/Boba's Big Jungle Adventure/vocals.wav",
+    "sha256": "3c52c9848d59672b99d792543c23c3fabc4c15b349a22cc759606f2483b76fe8",
+    "max_ref_length": 30,
+    "gpt_cond_len": 12,
+    "gpt_cond_chunk_len": 4,
+    "sound_norm_refs": true
+  },
+  "model": {
+    "name": "tts_models/multilingual/multi-dataset/xtts_v2",
+    "directory": ".audio-work/tts-cache/tts/tts_models--multilingual--multi-dataset--xtts_v2",
+    "required_files": [
+      "config.json",
+      "model.pth",
+      "speakers_xtts.pth",
+      "vocab.json"
+    ],
+    "device": "cpu",
+    "cpu_threads": 6
+  },
+  "synthesis": {
+    "language": "en",
+    "temperature": 0.6,
+    "length_penalty": 1.0,
+    "repetition_penalty": 5.5,
+    "top_k": 35,
+    "top_p": 0.8,
+    "speed": 0.9,
+    "enable_text_splitting": false,
+    "seed_namespace": "gotu-v1"
+  },
+  "quality": {
+    "max_attempts": 2,
+    "target_pitch_hz": 105.0,
+    "pitch_min_hz": 82.0,
+    "pitch_max_hz": 128.0,
+    "target_seconds_per_word": 0.48,
+    "min_seconds_per_word": 0.38,
+    "max_seconds_per_word": 0.65
+  },
+  "output": {
+    "sample_rate": 24000,
+    "subtype": "PCM_16",
+    "target_lufs": -18.0,
+    "peak_ceiling": 0.96,
+    "mp3_bitrate_kbps": 128
+  },
+  "runtime": {
+    "python": ".audio-venv39/bin/python",
+    "package_versions": {
+      "TTS": "0.22.0",
+      "torch": "2.2.2",
+      "lameenc": "1.8.1",
+      "numpy": "1.22.0",
+      "pyloudnorm": "0.2.0",
+      "scipy": "1.11.4",
+      "soundfile": "0.13.1"
+    }
+  }
+}
