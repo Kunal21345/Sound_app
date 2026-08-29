@@ -413,10 +413,13 @@ class GotuVoice:
         """Return a cached dry WAV, synthesizing one time only if requested."""
         normalized = normalize_text(text)
         path = self.cache_path(normalized)
-        if not self._integrity_audited:
-            self.audit(verify_runtime=False)
+
+        # Early cache check - avoid expensive model loading if already cached
         if path.is_file():
             return path
+
+        if not self._integrity_audited:
+            self.audit(verify_runtime=False)
         if not allow_synthesis:
             raise GotuVoiceError(
                 f"Gotu cache miss for {path.name}; synthesis was not allowed"
@@ -427,47 +430,76 @@ class GotuVoice:
         maximum_attempts = max(
             1, int(self.profile.get("quality", {}).get("max_attempts", 1))
         )
-        best_audio = None
-        best_metrics: Optional[Dict[str, Any]] = None
-        for attempt in range(maximum_attempts):
-            seed = self._seed(normalized, attempt)
-            random.seed(seed)
-            self._np.random.seed(seed)
-            self._torch.manual_seed(seed)
-            with self._torch.inference_mode():
-                result = self._model.inference(
-                    text=normalized,
-                    language=synthesis["language"],
-                    gpt_cond_latent=self._conditioning,
-                    speaker_embedding=self._speaker,
-                    temperature=float(synthesis["temperature"]),
-                    length_penalty=float(synthesis["length_penalty"]),
-                    repetition_penalty=float(synthesis["repetition_penalty"]),
-                    top_k=int(synthesis["top_k"]),
-                    top_p=float(synthesis["top_p"]),
-                    speed=float(synthesis["speed"]),
-                    enable_text_splitting=bool(
-                        synthesis["enable_text_splitting"]
-                    ),
-                )
-            candidate = self._postprocess(result["wav"])
-            metrics = self._candidate_quality(normalized, candidate)
-            if best_metrics is None or metrics["score"] < best_metrics["score"]:
-                best_audio = candidate
-                best_metrics = metrics
-            if metrics["acceptable"]:
-                break
-            if attempt + 1 < maximum_attempts:
+
+        # For very short texts, skip quality retry loop as it adds little value
+        word_count = len(re.findall(r"[A-Za-z0-9]+(?:'[A-Za-z]+)?", normalized))
+        if word_count <= 3:
+            maximum_attempts = 1
+
+        # Single-pass synthesis with optional quality check
+        seed = self._seed(normalized, 0)
+        random.seed(seed)
+        self._np.random.seed(seed)
+        self._torch.manual_seed(seed)
+        with self._torch.inference_mode():
+            result = self._model.inference(
+                text=normalized,
+                language=synthesis["language"],
+                gpt_cond_latent=self._conditioning,
+                speaker_embedding=self._speaker,
+                temperature=float(synthesis["temperature"]),
+                length_penalty=float(synthesis["length_penalty"]),
+                repetition_penalty=float(synthesis["repetition_penalty"]),
+                top_k=int(synthesis["top_k"]),
+                top_p=float(synthesis["top_p"]),
+                speed=float(synthesis["speed"]),
+                enable_text_splitting=bool(
+                    synthesis["enable_text_splitting"]
+                ),
+            )
+        audio = self._postprocess(result["wav"])
+
+        # Skip quality check if max_attempts is 1 (optimized path)
+        if maximum_attempts > 1:
+            best_audio = audio
+            best_metrics = self._candidate_quality(normalized, audio)
+
+            # Only retry if first attempt fails quality check
+            for attempt in range(1, maximum_attempts):
+                if best_metrics["acceptable"]:
+                    break
                 print(
                     "Gotu quality retry: "
-                    f"pitch={metrics['pitch_hz']:.1f} Hz, "
-                    f"pace={metrics['seconds_per_word']:.2f} s/word",
+                    f"pitch={best_metrics['pitch_hz']:.1f} Hz, "
+                    f"pace={best_metrics['seconds_per_word']:.2f} s/word",
                     flush=True,
                 )
-
-        if best_audio is None:
-            raise GotuVoiceError("XTTS did not return a usable Gotu candidate")
-        audio = best_audio
+                seed = self._seed(normalized, attempt)
+                random.seed(seed)
+                self._np.random.seed(seed)
+                self._torch.manual_seed(seed)
+                with self._torch.inference_mode():
+                    result = self._model.inference(
+                        text=normalized,
+                        language=synthesis["language"],
+                        gpt_cond_latent=self._conditioning,
+                        speaker_embedding=self._speaker,
+                        temperature=float(synthesis["temperature"]),
+                        length_penalty=float(synthesis["length_penalty"]),
+                        repetition_penalty=float(synthesis["repetition_penalty"]),
+                        top_k=int(synthesis["top_k"]),
+                        top_p=float(synthesis["top_p"]),
+                        speed=float(synthesis["speed"]),
+                        enable_text_splitting=bool(
+                            synthesis["enable_text_splitting"]
+                        ),
+                    )
+                candidate = self._postprocess(result["wav"])
+                metrics = self._candidate_quality(normalized, candidate)
+                if metrics["score"] < best_metrics["score"]:
+                    best_audio = candidate
+                    best_metrics = metrics
+            audio = best_audio
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(f".{os.getpid()}.tmp.wav")
         self._sf.write(

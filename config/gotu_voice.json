@@ -36,7 +36,7 @@
     "seed_namespace": "gotu-v1"
   },
   "quality": {
-    "max_attempts": 2,
+    "max_attempts": 1,
     "target_pitch_hz": 105.0,
     "pitch_min_hz": 82.0,
     "pitch_max_hz": 128.0,
