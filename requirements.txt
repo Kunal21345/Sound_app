@@ -6,3 +6,8 @@ numpy==1.22.0
 pyloudnorm==0.2.0
 scipy==1.11.4
 soundfile==0.13.1
+
+# voice_qa pipeline (optional, not required for story rendering)
+anthropic>=0.40.0
+openai-whisper>=20231117
+flask>=3.0.0

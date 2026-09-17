@@ -5,13 +5,12 @@
   "renderer_revision": "bedtime-v2",
   "description": "Canonical warm male bedtime story narrator",
   "reference": {
-    "path": ".audio-work/adventure-reference/htdemucs/friendship-recovered/vocals.wav",
-    "sha256": "f6ed881c499a52c7d363ea830a8bb96b5d8ff3375e6e7319807f0055bf260462",
+    "path": ".audio-work/adventure-reference/htdemucs/Boba's Big Jungle Adventure/vocals.wav",
+    "sha256": "3c52c9848d59672b99d792543c23c3fabc4c15b349a22cc759606f2483b76fe8",
     "max_ref_length": 30,
     "gpt_cond_len": 12,
     "gpt_cond_chunk_len": 4,
-    "sound_norm_refs": true,
-    "provenance": "Recovered from .audio-work\\friendship-reference\\htdemucs\\vocals.wav with demucs htdemucs because the original adventure-reference stem is absent and gitignored."
+    "sound_norm_refs": true
   },
   "model": {
     "name": "tts_models/multilingual/multi-dataset/xtts_v2",
@@ -53,15 +52,15 @@
     "mp3_bitrate_kbps": 128
   },
   "runtime": {
-    "python": ".audio-venv39/Scripts/python.exe",
+    "python": ".audio-venv39/bin/python",
     "package_versions": {
-      "coqui-tts": "0.27.5",
-      "torch": "2.8.0",
-      "lameenc": "1.8.4",
-      "numpy": "2.2.6",
+      "TTS": "0.22.0",
+      "torch": "2.2.2",
+      "lameenc": "1.8.1",
+      "numpy": "1.22.0",
       "pyloudnorm": "0.2.0",
-      "scipy": "1.15.3",
-      "soundfile": "0.14.0"
+      "scipy": "1.11.4",
+      "soundfile": "0.13.1"
     }
   }
 }

@@ -17,6 +17,6 @@ male narrator voice, use `scripts/render_gotu_voice.py` or import
 - Do not create preview variants, raw-edit chains, or full-story alternatives
   unless the user explicitly asks for them.
 - All references, caches, intermediates, and renders stay in `Sound_app`.
-  Publish only final website-ready tracks to `story_app/public/story/audio`.
+  Publish only final website-ready tracks to `/audio`.
 - Running the renderer with no text is a read-only audit and must not create
   audio.
