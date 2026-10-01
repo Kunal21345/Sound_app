@@ -6,7 +6,7 @@
   "description": "Canonical warm male bedtime story narrator",
   "reference": {
     "path": ".audio-work/adventure-reference/htdemucs/friendship-recovered/vocals.wav",
-    "sha256": "f6ed881c499a52c7d363ea830a8bb96b5d8ff3375e6e7319807f0055bf260462",
+    "sha256": "9cb4c1af82662b8439bb37cc4aabd84002f28c82fe5aba1445bf0cc5181414f0",
     "max_ref_length": 30,
     "gpt_cond_len": 12,
     "gpt_cond_chunk_len": 4,
@@ -14,14 +14,23 @@
     "provenance": "Recovered from .audio-work\\friendship-reference\\htdemucs\\vocals.wav with demucs htdemucs because the original adventure-reference stem is absent and gitignored."
   },
   "model": {
-    "name": "tts_models/multilingual/multi-dataset/xtts_v2",
-    "directory": ".audio-work/tts-cache/tts/tts_models--multilingual--multi-dataset--xtts_v2",
+    "name": "OpenVoice V2",
+    "backend": "openvoice-v2",
+    "license": "MIT",
+    "directory": ".audio-work/openvoice",
     "required_files": [
-      "config.json",
-      "model.pth",
-      "speakers_xtts.pth",
-      "vocab.json"
+      "checkpoints_v2/converter/config.json",
+      "checkpoints_v2/converter/checkpoint.pth",
+      "checkpoints_v2/base_speakers/ses/en-newest.pth",
+      "melo-english-v3/config.json",
+      "melo-english-v3/checkpoint.pth"
     ],
+    "converter_config": "checkpoints_v2/converter/config.json",
+    "converter_checkpoint": "checkpoints_v2/converter/checkpoint.pth",
+    "base_speaker_embedding": "checkpoints_v2/base_speakers/ses/en-newest.pth",
+    "base_config": "melo-english-v3/config.json",
+    "base_checkpoint": "melo-english-v3/checkpoint.pth",
+    "base_language": "EN_NEWEST",
     "device": "cpu",
     "cpu_threads": 6
   },
@@ -33,6 +42,7 @@
     "top_k": 35,
     "top_p": 0.8,
     "speed": 0.9,
+    "tone_color_tau": 0.3,
     "enable_text_splitting": false,
     "seed_namespace": "gotu-v1"
   },
@@ -53,12 +63,13 @@
     "mp3_bitrate_kbps": 128
   },
   "runtime": {
-    "python": ".audio-venv39/Scripts/python.exe",
+    "python": ".gotu-venv/bin/python",
     "package_versions": {
-      "coqui-tts": "0.27.5",
-      "torch": "2.8.0",
+      "MyShell-OpenVoice": "0.0.0",
+      "melotts": "0.1.2",
+      "torch": "2.2.2",
       "lameenc": "1.8.4",
-      "numpy": "2.2.6",
+      "numpy": "1.26.4",
       "pyloudnorm": "0.2.0",
       "scipy": "1.15.3",
       "soundfile": "0.14.0"

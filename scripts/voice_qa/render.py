@@ -56,21 +56,17 @@ class ExpressiveGotu:
             )
 
         self._voice._load_model()
-        with self._voice._torch.inference_mode():
-            result = self._voice._model.inference(
-                text=normalized,
-                language=synthesis["language"],
-                gpt_cond_latent=self._voice._conditioning,
-                speaker_embedding=self._voice._speaker,
-                temperature=params["temperature"],
-                length_penalty=float(synthesis["length_penalty"]),
-                repetition_penalty=float(synthesis["repetition_penalty"]),
-                top_k=int(synthesis["top_k"]),
-                top_p=float(synthesis["top_p"]),
-                speed=params["speed"],
-                enable_text_splitting=bool(synthesis["enable_text_splitting"]),
-            )
-        audio = self._voice._postprocess(result["wav"])
+        base_temperature = float(synthesis["temperature"])
+        base_tau = float(synthesis.get("tone_color_tau", 0.3))
+        tau = max(
+            0.1,
+            min(0.5, base_tau * params["temperature"] / base_temperature),
+        )
+        audio = self._voice._synthesize_once(
+            normalized,
+            speed=params["speed"],
+            tone_color_tau=tau,
+        )
 
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp.wav")

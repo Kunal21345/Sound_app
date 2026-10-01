@@ -1,164 +1,100 @@
 #!/usr/bin/env python3
-"""Minimal browser UI for the voice_qa pipeline.
+"""Flask API for the local voice studio.
 
 Run:
-    .\\.audio-venv39\\Scripts\\python.exe -m scripts.voice_qa.webapp
+    python -m scripts.voice_qa.webapp
 
-Then open http://127.0.0.1:5000 in a browser. If ANTHROPIC_API_KEY is not
-set, check "mock answer" to exercise the renderer with a canned response
-instead of calling Claude.
+The Next.js studio frontend runs separately on port 3000 and proxies requests
+to this server.
 """
 
 from __future__ import annotations
 
-import time
 import uuid
+import tempfile
+import os
+import sys
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory
 
-from . import llm
-from .expression_map import EXPRESSIONS
-from .render import ExpressiveGotu
+from .studio_render import StudioRenderer, settings_from
 from .. import sound_paths
+from .. import gotu_voice
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 26 * 1024 * 1024
 OUTPUT_DIR = sound_paths.SOUND_ROOT / "output/voice_qa_web"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-_renderer: ExpressiveGotu | None = None
+_renderer: StudioRenderer | None = None
 
 
-def _get_renderer() -> ExpressiveGotu:
+def _get_renderer() -> StudioRenderer:
     global _renderer
     if _renderer is None:
-        _renderer = ExpressiveGotu()
+        _renderer = StudioRenderer()
     return _renderer
-
-
-def _mock_answer(question: str, expression: str) -> dict:
-    return {
-        "answer": f"You asked, \"{question}\" So here is my answer, spoken with a {expression} feeling.",
-        "expression": expression,
-    }
-
-
-PAGE = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Gotu Voice Q&A</title>
-<style>
-  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
-  textarea { width: 100%; height: 70px; font-size: 15px; }
-  select, button { font-size: 15px; padding: 6px 10px; margin-top: 8px; }
-  #status { margin-top: 14px; white-space: pre-wrap; color: #333; }
-  #error { color: #b00020; }
-  label { display: block; margin-top: 10px; }
-</style>
-</head>
-<body>
-  <h2>Gotu Voice Q&amp;A</h2>
-  <textarea id="question" placeholder="Ask a question...">What are you doing?</textarea>
-
-  <label><input type="checkbox" id="mock" checked> Mock answer (no ANTHROPIC_API_KEY needed)</label>
-
-  <label>Expression (used only when mocking):
-    <select id="expression">
-      __OPTIONS__
-    </select>
-  </label>
-
-  <label><input type="checkbox" id="allow_synthesis" checked> Allow synthesis on cache miss</label>
-
-  <button onclick="ask()">Ask</button>
-  <div id="status"></div>
-  <audio id="player" controls style="display:none; margin-top:12px; width:100%"></audio>
-
-<script>
-async function ask() {
-  const status = document.getElementById('status');
-  const player = document.getElementById('player');
-  status.textContent = 'Rendering...';
-  status.className = '';
-  player.style.display = 'none';
-  try {
-    const res = await fetch('/ask', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        question: document.getElementById('question').value,
-        mock: document.getElementById('mock').checked,
-        expression: document.getElementById('expression').value,
-        allow_synthesis: document.getElementById('allow_synthesis').checked,
-      })
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'request failed');
-    status.textContent = 'Answer (' + data.expression + '): ' + data.answer;
-    player.src = data.audio_url;
-    player.style.display = 'block';
-    player.play();
-  } catch (err) {
-    status.textContent = 'Error: ' + err.message;
-    status.className = 'error';
-  }
-}
-</script>
-</body>
-</html>"""
 
 
 @app.route("/")
 def index():
-    options = "\n".join(f'<option value="{tag}">{tag}</option>' for tag in EXPRESSIONS)
-    return PAGE.replace("__OPTIONS__", options)
+    return redirect("http://127.0.0.1:3000")
+
 
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    payload = request.get_json(force=True) or {}
+    payload = request.form
     question = str(payload.get("question", "")).strip()
     if not question:
-        return jsonify({"error": "question is required"}), 400
-
-    allow_synthesis = bool(payload.get("allow_synthesis", True))
-    mock = bool(payload.get("mock", True))
-
+        return jsonify({"error": "Enter a script before generating speech."}), 400
+    reference = request.files.get("reference")
+    if reference is None or not reference.filename:
+        return jsonify({"error": "Upload a voice recording before generating speech."}), 400
     try:
-        if mock:
-            expression = str(payload.get("expression", "neutral")).strip().lower()
-            if expression not in EXPRESSIONS:
-                expression = "neutral"
-            result = _mock_answer(question, expression)
-        else:
-            result = llm.ask(question)
-
-        renderer = _get_renderer()
-        wav_path = renderer.render(
-            result["answer"], result["expression"], allow_synthesis=allow_synthesis
-        )
-
+        settings = settings_from(payload)
+        upload_root = sound_paths.SOUND_ROOT / ".audio-work/studio/uploads"
+        upload_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=upload_root) as directory:
+            uploaded = Path(directory) / "reference.audio"
+            reference.save(uploaded)
+            if not 0 < uploaded.stat().st_size <= 25 * 1024 * 1024:
+                return jsonify({"error": "Upload an audio file up to 25 MB."}), 400
+            wav_path = _get_renderer().render(question, uploaded, settings)
         filename = f"{uuid.uuid4().hex}.wav"
-        destination = OUTPUT_DIR / filename
-        destination.write_bytes(Path(wav_path).read_bytes())
+        (OUTPUT_DIR / filename).write_bytes(wav_path.read_bytes())
+        return jsonify({"audio_url": f"/audio/{filename}", "expression": settings["expression"],
+                        "voice": "uploaded", "settings": settings})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        app.logger.exception("Reference voice synthesis failed")
+        return jsonify({"error": "Speech generation failed. Check the Flask terminal for details."}), 500
 
-        return jsonify(
-            {
-                "question": question,
-                "answer": result["answer"],
-                "expression": result["expression"],
-                "audio_url": f"/audio/{filename}",
-            }
-        )
-    except Exception as exc:  # surfaced to the UI, not a security boundary
-        return jsonify({"error": str(exc)}), 500
+
+@app.errorhandler(413)
+def upload_too_large(error):
+    return jsonify({"error": "Upload an audio file up to 25 MB."}), 413
 
 
 @app.route("/audio/<path:filename>")
 def audio(filename: str):
-    return send_from_directory(OUTPUT_DIR, filename)
+    return send_from_directory(
+        OUTPUT_DIR, filename,
+        as_attachment=request.args.get("download") == "1",
+        download_name="generated-speech.wav" if request.args.get("download") == "1" else None,
+    )
 
 
 if __name__ == "__main__":
+    preferred_python = gotu_voice.GotuVoice().preferred_python
+    if not preferred_python.is_file():
+        raise SystemExit(f"Pinned Gotu Python is missing: {preferred_python}")
+    if Path(sys.executable).resolve() != preferred_python.resolve():
+        os.execve(
+            str(preferred_python),
+            [str(preferred_python), "-m", "scripts.voice_qa.webapp"],
+            os.environ.copy(),
+        )
     app.run(host="127.0.0.1", port=5000, debug=False)

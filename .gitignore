@@ -1,6 +1,10 @@
 .DS_Store
 .venv/
+.gotu-venv/
 .audio-venv*/
 .audio-work/
+.next/
+node_modules/
 __pycache__/
 *.py[cod]
+node_modules

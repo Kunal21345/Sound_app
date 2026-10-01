@@ -19,9 +19,16 @@ from typing import Any, Dict, Optional
 SOUND_ROOT = Path(__file__).resolve().parents[1]
 PROFILE_PATH = SOUND_ROOT / "config/gotu_voice.json"
 NUMBA_CACHE_PATH = SOUND_ROOT / ".audio-work/gotu/numba-cache"
+OPENVOICE_CACHE_PATH = SOUND_ROOT / ".audio-work/openvoice/hf-cache"
+NLTK_CACHE_PATH = SOUND_ROOT / ".audio-work/openvoice/nltk-data"
 
 os.environ.setdefault("TTS_HOME", str(SOUND_ROOT / ".audio-work/tts-cache"))
 os.environ.setdefault("NUMBA_CACHE_DIR", str(NUMBA_CACHE_PATH))
+os.environ.setdefault("HF_HOME", str(OPENVOICE_CACHE_PATH))
+os.environ.setdefault("TRANSFORMERS_CACHE", str(OPENVOICE_CACHE_PATH))
+os.environ.setdefault("NLTK_DATA", str(NLTK_CACHE_PATH))
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
 class GotuVoiceError(RuntimeError):
@@ -102,11 +109,13 @@ class GotuVoice:
             / f"{self.profile['voice_id']}-{self.profile_hash[:12]}.pt"
         )
         self._model: Any = None
+        self._base_tts: Any = None
         self._torch: Any = None
         self._np: Any = None
         self._sf: Any = None
         self._pyln: Any = None
         self._uniform_filter1d: Any = None
+        self._resample_poly: Any = None
         self._conditioning: Any = None
         self._speaker: Any = None
         self._integrity_audited = False
@@ -167,7 +176,7 @@ class GotuVoice:
         ]
         if missing_model_files:
             issues.append(
-                "missing XTTS model files: " + ", ".join(missing_model_files)
+                "missing voice model files: " + ", ".join(missing_model_files)
             )
 
         package_status: Dict[str, str] = {}
@@ -225,15 +234,26 @@ class GotuVoice:
         threads = int(self.profile["model"]["cpu_threads"])
         torch.set_num_threads(threads)
         torch.set_num_interop_threads(max(1, min(2, threads)))
-        from TTS.api import TTS
+        from melo.api import TTS
+        from openvoice.api import ToneColorConverter
 
         self._load_audio_tools()
-        api = TTS(
-            self.profile["model"]["name"],
-            progress_bar=False,
-            gpu=False,
+        model = self.profile["model"]
+        self._model = ToneColorConverter(
+            str(self.model_directory / model["converter_config"]),
+            device="cpu",
+            enable_watermark=False,
         )
-        self._model = api.synthesizer.tts_model
+        self._model.load_ckpt(
+            str(self.model_directory / model["converter_checkpoint"])
+        )
+        self._base_tts = TTS(
+            language=model["base_language"],
+            device="cpu",
+            use_hf=False,
+            config_path=str(self.model_directory / model["base_config"]),
+            ckpt_path=str(self.model_directory / model["base_checkpoint"]),
+        )
         self._torch = torch
         self._load_conditioning()
 
@@ -251,11 +271,13 @@ class GotuVoice:
         import pyloudnorm as pyln
         import soundfile as sf
         from scipy.ndimage import uniform_filter1d
+        from scipy.signal import resample_poly
 
         self._np = np
         self._sf = sf
         self._pyln = pyln
         self._uniform_filter1d = uniform_filter1d
+        self._resample_poly = resample_poly
 
     def _load_conditioning(self) -> None:
         if self.conditioning_path.is_file():
@@ -267,15 +289,13 @@ class GotuVoice:
                 self._speaker = saved["speaker"]
                 return
 
-        reference = self.profile["reference"]
-        self._conditioning, self._speaker = (
-            self._model.get_conditioning_latents(
-                audio_path=[str(self.reference_path)],
-                max_ref_length=int(reference["max_ref_length"]),
-                gpt_cond_len=int(reference["gpt_cond_len"]),
-                gpt_cond_chunk_len=int(reference["gpt_cond_chunk_len"]),
-                sound_norm_refs=bool(reference["sound_norm_refs"]),
-            )
+        self._conditioning = self._model.extract_se(
+            [str(self.reference_path)]
+        )
+        self._speaker = self._torch.load(
+            self.model_directory
+            / self.profile["model"]["base_speaker_embedding"],
+            map_location="cpu",
         )
         self.conditioning_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.conditioning_path.with_suffix(
@@ -291,12 +311,62 @@ class GotuVoice:
         )
         temporary.replace(self.conditioning_path)
 
+    def _synthesize_once(
+        self,
+        normalized_text: str,
+        speed: Optional[float] = None,
+        tone_color_tau: Optional[float] = None,
+    ) -> Any:
+        """Generate base speech and convert it to Gotu's locked tone color."""
+        work = SOUND_ROOT / ".audio-work/gotu/tmp"
+        work.mkdir(parents=True, exist_ok=True)
+        token = f"{os.getpid()}-{self._seed(normalized_text)}"
+        base_path = work / f"{token}-base.wav"
+        converted_path = work / f"{token}-converted.wav"
+        synthesis = self.profile["synthesis"]
+        try:
+            speaker_id = next(iter(self._base_tts.hps.data.spk2id.values()))
+            self._base_tts.tts_to_file(
+                normalized_text,
+                speaker_id,
+                str(base_path),
+                speed=(
+                    float(synthesis["speed"])
+                    if speed is None
+                    else float(speed)
+                ),
+                quiet=True,
+            )
+            self._model.convert(
+                audio_src_path=str(base_path),
+                src_se=self._speaker,
+                tgt_se=self._conditioning,
+                output_path=str(converted_path),
+                tau=(
+                    float(synthesis.get("tone_color_tau", 0.3))
+                    if tone_color_tau is None
+                    else float(tone_color_tau)
+                ),
+                message="Gotu",
+            )
+            audio, rate = self._sf.read(converted_path, dtype="float32")
+            target_rate = int(self.profile["output"]["sample_rate"])
+            if rate != target_rate:
+                divisor = math.gcd(rate, target_rate)
+                audio = self._resample_poly(
+                    audio, target_rate // divisor, rate // divisor
+                ).astype(self._np.float32)
+            return self._postprocess(audio)
+        finally:
+            base_path.unlink(missing_ok=True)
+            converted_path.unlink(missing_ok=True)
+
     def _postprocess(self, wav: Any) -> Any:
         output = self.profile["output"]
         rate = int(output["sample_rate"])
         audio = self._np.asarray(wav, dtype=self._np.float32).squeeze()
         if audio.ndim != 1 or not len(audio):
-            raise GotuVoiceError("XTTS returned invalid audio")
+            raise GotuVoiceError("voice model returned invalid audio")
 
         envelope = self._np.sqrt(
             self._uniform_filter1d(
@@ -426,7 +496,6 @@ class GotuVoice:
             )
 
         self._load_model()
-        synthesis = self.profile["synthesis"]
         maximum_attempts = max(
             1, int(self.profile.get("quality", {}).get("max_attempts", 1))
         )
@@ -441,23 +510,7 @@ class GotuVoice:
         random.seed(seed)
         self._np.random.seed(seed)
         self._torch.manual_seed(seed)
-        with self._torch.inference_mode():
-            result = self._model.inference(
-                text=normalized,
-                language=synthesis["language"],
-                gpt_cond_latent=self._conditioning,
-                speaker_embedding=self._speaker,
-                temperature=float(synthesis["temperature"]),
-                length_penalty=float(synthesis["length_penalty"]),
-                repetition_penalty=float(synthesis["repetition_penalty"]),
-                top_k=int(synthesis["top_k"]),
-                top_p=float(synthesis["top_p"]),
-                speed=float(synthesis["speed"]),
-                enable_text_splitting=bool(
-                    synthesis["enable_text_splitting"]
-                ),
-            )
-        audio = self._postprocess(result["wav"])
+        audio = self._synthesize_once(normalized)
 
         # Skip quality check if max_attempts is 1 (optimized path)
         if maximum_attempts > 1:
@@ -478,23 +531,7 @@ class GotuVoice:
                 random.seed(seed)
                 self._np.random.seed(seed)
                 self._torch.manual_seed(seed)
-                with self._torch.inference_mode():
-                    result = self._model.inference(
-                        text=normalized,
-                        language=synthesis["language"],
-                        gpt_cond_latent=self._conditioning,
-                        speaker_embedding=self._speaker,
-                        temperature=float(synthesis["temperature"]),
-                        length_penalty=float(synthesis["length_penalty"]),
-                        repetition_penalty=float(synthesis["repetition_penalty"]),
-                        top_k=int(synthesis["top_k"]),
-                        top_p=float(synthesis["top_p"]),
-                        speed=float(synthesis["speed"]),
-                        enable_text_splitting=bool(
-                            synthesis["enable_text_splitting"]
-                        ),
-                    )
-                candidate = self._postprocess(result["wav"])
+                candidate = self._synthesize_once(normalized)
                 metrics = self._candidate_quality(normalized, candidate)
                 if metrics["score"] < best_metrics["score"]:
                     best_audio = candidate
